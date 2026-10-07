@@ -1,5 +1,4 @@
 import os
-import tempfile
 import numpy as np
 import gc
 import torch
@@ -7,6 +6,7 @@ import pathlib
 from vfi_utils import load_file_from_github_release, preprocess_frames, postprocess_frames, InterpolationStateList
 import typing
 from comfy.model_management import get_torch_device, soft_empty_cache
+import folder_paths
 from packaging import version
 
 MODEL_TYPE = pathlib.Path(__file__).parent.name
@@ -229,7 +229,7 @@ class RIFE_VFI:
                     optional_interpolation_states.is_frame_skipped(pair_idx))
         )
 
-        temp_dir = os.path.join(tempfile.gettempdir(), "comfyui_rife_stream")
+        temp_dir = os.path.join(folder_paths.get_temp_directory(), "comfyui_rife_stream")
         os.makedirs(temp_dir, exist_ok=True)
         memmap_path = os.path.join(
             temp_dir, f"rife_{os.getpid()}_{id(frames)}.dat"
@@ -296,6 +296,7 @@ class RIFE_VFI:
             # giant RAM allocation or torch.cat() is performed here.
             out_tensor = torch.from_numpy(output_mm)
             print(f"Comfy-VFI done! {out_pos} frames generated via disk-backed streaming")
+            print(f"Comfy-VFI: Streaming temp file: {memmap_path}")
             return (postprocess_frames(out_tensor),)
         except Exception:
             try:
