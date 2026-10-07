@@ -1,4 +1,6 @@
 import os
+import tempfile
+import folder_paths
 import numpy as np
 import gc
 import torch
@@ -6,7 +8,6 @@ import pathlib
 from vfi_utils import load_file_from_github_release, preprocess_frames, postprocess_frames, InterpolationStateList
 import typing
 from comfy.model_management import get_torch_device, soft_empty_cache
-import folder_paths
 from packaging import version
 
 MODEL_TYPE = pathlib.Path(__file__).parent.name
@@ -292,16 +293,39 @@ class RIFE_VFI:
                 )
 
             output_mm.flush()
-            # torch.from_numpy keeps the memmap as the tensor backing store; no
-            # giant RAM allocation or torch.cat() is performed here.
-            out_tensor = torch.from_numpy(output_mm)
+
+            # The ComfyUI IMAGE result must outlive this node call, so make the
+            # final output independent of the disk-backed memmap before cleanup.
+            # This is the one unavoidable full-output RAM allocation at the very
+            # end; interpolation itself remains streamed to disk.
+            out_tensor = torch.from_numpy(output_mm).clone()
             print(f"Comfy-VFI done! {out_pos} frames generated via disk-backed streaming")
-            print(f"Comfy-VFI: Streaming temp file: {memmap_path}")
             return (postprocess_frames(out_tensor),)
         except Exception:
+            raise
+        finally:
+            # Windows keeps a mapped file locked until the NumPy memmap object is
+            # released. Close it first, then remove the temporary file. This also
+            # cleans up after failed/cancelled runs rather than leaving large .dat
+            # files behind on the ComfyUI drive.
             try:
                 output_mm.flush()
             except Exception:
                 pass
-            raise
+            try:
+                del output_mm
+            except Exception:
+                pass
+            gc.collect()
+            try:
+                if os.path.exists(memmap_path):
+                    os.remove(memmap_path)
+                    print(f"Comfy-VFI: Removed temporary RIFE file: {memmap_path}")
+            except Exception as cleanup_error:
+                print(f"Comfy-VFI: WARNING - could not remove temporary RIFE file: {cleanup_error}")
+            try:
+                if os.path.isdir(temp_dir) and not os.listdir(temp_dir):
+                    os.rmdir(temp_dir)
+            except Exception:
+                pass
 
